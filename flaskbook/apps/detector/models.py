@@ -16,7 +16,7 @@ class UserImage(db.Model):
         db.DateTime, default=datetime.now, onupdate=datetime.now
     )
     
-class UserimageTag(db.Model):
+class UserImageTag(db.Model):
     __tablename__ = "user_image_tags"
     id = db.Column(db.Integer, primary_key=True)
     # user_image_id는 user_images 테이블의 id 컬럼을 외부 키로 설정한다

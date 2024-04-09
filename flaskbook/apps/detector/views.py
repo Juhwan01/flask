@@ -7,13 +7,13 @@ import torchvision
 from apps.app import db
 from apps.crud.models import User
 # UserImageTag를 추가로 import한다
-from apps.detector.models import UserImage, UserimageTag
+from apps.detector.models import UserImage, UserImageTag
 # uuid를 import한다
 import uuid
 # Path를 import한다
 from pathlib import Path
 # UploadImageForm을 import한다
-from apps.detector.forms import UploadImageForm
+from apps.detector.forms import UploadImageForm, DetectorForm, DeleteForm
 # redirect, url_for를 추가로 import한다
 # flash를 추가로 import한다
 from flask import (
@@ -68,13 +68,41 @@ def upload_image():
 @dt.route("/")
 def index():
     # User와 UserImage를 Join해서 이미지 일람을 취득한다
+    # 이미지 일람을 가져온다
     user_images = (
         db.session.query(User, UserImage)
         .join(UserImage)
         .filter(User.id == UserImage.user_id)
         .all()
     )
-    return render_template("detector/index.html", user_images=user_images)
+    
+    # 태그 일람을 가져온다
+    user_image_tag_dict = {}
+    for user_image in user_images:
+        # 이미지에 연결할 태그 일람을 가져온다
+        user_image_tags = (
+            db.session.query(UserImageTag)
+            .filter(UserImageTag.user_image_id == user_image.UserImage.id)
+            .all()
+        )
+        user_image_tag_dict[user_image.UserImage.id] = user_image_tags
+        
+    # 물체 감지 폼을 인스턴스화한다
+    detector_form = DetectorForm()
+    #  Deleteform을 인스턴스화한다
+    delete_form = DeleteForm()
+        
+        
+    return render_template(
+        "detector/index.html", 
+        user_images=user_images,
+        # 태그 일람을 템플릿에 전달한다
+        user_image_tag_dict=user_image_tag_dict,
+        # 물체 감지 폼을 템플릿에 전달한다
+        detector_form=detector_form,
+        # 이미지 삭제 폼을 템플릿에 건넨다,
+        delete_form=delete_form
+    )
 
 
 @dt.route("/images/<path:filename>")
@@ -112,6 +140,28 @@ def detect(image_id):
     
     return redirect(url_for("detector.index"))
 
+
+@dt.route("/images/delete/<string:image_id>", methods=["POST"])
+@login_required
+def delete_image(image_id):
+    try:
+        # user_image_tags 테이블로부터 레코드를 삭제한다
+        db.session.query(UserImageTag).filter(
+            UserImageTag.user_image_id == image_id
+        ).delete()
+
+        # user_images 테이블로부터 레코드를 삭제한다
+        db.session.query(UserImage).filter(UserImage.id == image_id).delete()
+
+        db.session.commit()
+    except Exception as e:
+        flash("이미지 삭제 처리에서 오류가 발생했습니다.")
+        # エラーログ出力
+        current_app.logger.error(e)
+        db.session.rollback()
+    return redirect(url_for("detector.index"))
+
+
 def make_color(labels):
     # 테두리 선의 색을 랜덤으로 결정
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in labels]
@@ -125,7 +175,7 @@ def make_line(result_image):
 
 def draw_lines(c1, c2, result_image, line, color):
     # 사각형의 테두리 선을 이미지에 덧붙여 씀
-    cv2.rectangle(result_image, c1, c2, color, thinckness=line)
+    cv2.rectangle(result_image, c1, c2, color, thickness=line)
     return cv2
 
 def draw_texts(result_image, line, c1, cv2, color, labels, label):
@@ -148,6 +198,7 @@ def draw_texts(result_image, line, c1, cv2, color, labels, label):
     return cv2
 
 def exec_detect(target_image_path):
+    
     # 라벨 읽어 들이기
     labels = current_app.config["LABELS"]
     # 이미지 읽어 들이기
@@ -155,7 +206,7 @@ def exec_detect(target_image_path):
     # 이미지 데이터를 텐서 타입의 수치 데이터로 변환
     image_tensor = torchvision.transforms.functional.to_tensor(image)
     # 학습 완료 모델의 읽어 들이기
-    model = torchvision.load(Path(current_app.root_path, "detector", "model.pt"))
+    model = torch.load(Path(current_app.root_path, "detector", "model.pt"))
     # 모델의 추론 모드로 전환
     model=model.eval()
     # 추론의 실행
@@ -189,12 +240,8 @@ def exec_detect(target_image_path):
     detected_image_file_path = str(
         Path(current_app.config["UPLOAD_FOLDER"], detected_image_file_name)
     )
-    
     # 변환 후의 이미지 파일의 보존처로 복사한다
-    cv2.imwrite(detected_image_file_path, cv2.cvtColor(
-        result_image, cv2.COLOR_RGB2BGR)
-    )
-    
+    cv2.imwrite(detected_image_file_path, cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR))
     return tags, detected_image_file_name
 
 def save_detected_image_tags(user_image, tags, detected_image_file_name):
